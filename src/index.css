@@ -1,0 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Noto Sans JP", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-zen-bg: #F8F7F4;
+  --color-zen-ink: #1A1A1A;
+  --color-zen-red: #BC2F32; /* Traditional Japanese Red */
+  --color-zen-indigo: #2B3A67;
+  --color-zen-border: rgba(26, 26, 26, 0.08);
+}
+
+@layer base {
+  body {
+    @apply bg-zen-bg text-zen-ink antialiased;
+  }
+}
