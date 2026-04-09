@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo, useEffect, useRef, useCallback, ChangeEvent, FormEvent } from 'react';
-import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings, X, Plus, Upload, Cloud, CloudOff, RefreshCw, Download, ShieldCheck, Cpu, Share2, AlertTriangle } from 'lucide-react';
+import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings, X, Plus, Upload, Cloud, CloudOff, RefreshCw, Download, ShieldCheck, Cpu, Share2, AlertTriangle, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { Turnstile } from './components/Turnstile';
@@ -65,6 +65,7 @@ const SakuraBackground = () => {
 };
 
 export default function App() {
+  const [currentView, setCurrentView] = useState<'home' | 'searcher' | 'admin'>('home');
   const [isVerified, setIsVerified] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -78,7 +79,6 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Admin State
-  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState(false);
@@ -93,6 +93,7 @@ export default function App() {
   const [isLinkLocked, setIsLinkLocked] = useState(false);
   const [isCheckingLink, setIsCheckingLink] = useState(true);
   const [shareLink, setShareLink] = useState<string | null>(null);
+  const [shareLinksList, setShareLinksList] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
   const [deviceId, setDeviceId] = useState<string>('');
 
@@ -131,13 +132,18 @@ export default function App() {
           if (linkData.is_used && linkData.device_id !== currentDeviceId) {
             setVerificationError('This link is already used by another device.');
             setIsLinkLocked(true);
-          } else if (!linkData.is_used) {
-            // Claim the link
-            await supabase
-              .from('share_links')
-              .update({ is_used: true, device_id: currentDeviceId })
-              .eq('id', linkId);
-            console.log('Link claimed by device:', currentDeviceId);
+          } else {
+            if (!linkData.is_used) {
+              // Claim the link
+              await supabase
+                .from('share_links')
+                .update({ is_used: true, device_id: currentDeviceId })
+                .eq('id', linkId);
+              console.log('Link claimed by device:', currentDeviceId);
+            }
+            // Link is valid (either newly claimed or already owned by this device)
+            setIsVerified(true);
+            setCurrentView('searcher');
           }
         }
       } catch (error) {
@@ -150,6 +156,46 @@ export default function App() {
     validateLink();
   }, []);
 
+  const fetchShareLinks = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('share_links')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setShareLinksList(data || []);
+    } catch (error) {
+      console.error('Error fetching share links:', error);
+    }
+  }, []);
+
+  const deleteShareLink = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('share_links')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      setShareLinksList(prev => prev.filter(link => link.id !== id));
+    } catch (error) {
+      console.error('Error deleting share link:', error);
+    }
+  };
+
+  const clearAllLinks = async () => {
+    if (!window.confirm('Are you sure you want to delete ALL share links? This cannot be undone.')) return;
+    try {
+      const { error } = await supabase
+        .from('share_links')
+        .delete()
+        .neq('id', ''); // Delete all
+      if (error) throw error;
+      setShareLinksList([]);
+    } catch (error) {
+      console.error('Error clearing links:', error);
+    }
+  };
+
   const generateShareLink = async () => {
     const linkId = Math.random().toString(36).substring(2, 15);
     try {
@@ -157,7 +203,7 @@ export default function App() {
         .from('share_links')
         .insert({
           id: linkId,
-          created_by: user?.id || null, // Optional now
+          created_by: user?.id || null,
           is_used: false
         });
       
@@ -166,10 +212,9 @@ export default function App() {
       const url = new URL(window.location.href);
       url.searchParams.set('sl', linkId);
       setShareLink(url.toString());
+      fetchShareLinks(); // Refresh list
     } catch (error) {
       console.error('Supabase Error:', error);
-      // Fallback: if database insert fails, we still show the link for UI testing
-      // but warn the user.
       const url = new URL(window.location.href);
       url.searchParams.set('sl', linkId);
       setShareLink(url.toString());
@@ -217,7 +262,8 @@ export default function App() {
     };
 
     fetchData();
-  }, []);
+    fetchShareLinks();
+  }, [fetchShareLinks]);
 
   // Cooldown Persistence & Timer
   useEffect(() => {
@@ -401,6 +447,111 @@ export default function App() {
     }
   }, []);
 
+  const HomeView = () => (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="max-w-4xl mx-auto px-6 py-20 space-y-16"
+    >
+      <div className="text-center space-y-6">
+        <motion.div 
+          initial={{ scale: 0.9 }}
+          animate={{ scale: 1 }}
+          className="inline-block p-4 bg-zen-red/10 rounded-3xl mb-4"
+        >
+          <Cpu className="w-16 h-16 text-zen-red" />
+        </motion.div>
+        <h1 className="text-5xl font-bold tracking-tight text-zen-ink">Omni Searcher</h1>
+        <p className="text-xl text-gray-500 max-w-2xl mx-auto leading-relaxed">
+          The ultimate terminal for high-speed data extraction and keyword filtering. 
+          Engineered for precision, secured for privacy.
+        </p>
+        <div className="flex justify-center pt-4">
+          <a 
+            href="https://t.me/ItsMeJeff"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-10 py-5 bg-zen-ink text-white rounded-full font-bold text-xs tracking-[0.3em] hover:bg-zen-red transition-all shadow-2xl shadow-zen-ink/20 flex items-center gap-4 group"
+          >
+            GET STARTED
+            <Search className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          </a>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-4 hover:border-zen-red/30 transition-all group">
+          <div className="w-12 h-12 bg-zen-red/5 rounded-xl flex items-center justify-center group-hover:bg-zen-red group-hover:text-white transition-all">
+            <Filter className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold">Auto URL Removal</h3>
+          <p className="text-sm text-gray-400">Automatically strips URLs from results to make it easier to loot accounts and manage your data better.</p>
+        </div>
+        <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-4 hover:border-zen-red/30 transition-all group">
+          <div className="w-12 h-12 bg-zen-red/5 rounded-xl flex items-center justify-center group-hover:bg-zen-red group-hover:text-white transition-all">
+            <RefreshCw className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold">Real-time Sync</h3>
+          <p className="text-sm text-gray-400">Cloud-powered stock management with instant updates across all your sessions.</p>
+        </div>
+        <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-4 hover:border-zen-red/30 transition-all group">
+          <div className="w-12 h-12 bg-zen-red/5 rounded-xl flex items-center justify-center group-hover:bg-zen-red group-hover:text-white transition-all">
+            <ShieldCheck className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold">Anti-Leak Tech</h3>
+          <p className="text-sm text-gray-400">Secure single-device links ensure your data stays where it belongs.</p>
+        </div>
+        <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-4 hover:border-zen-red/30 transition-all group">
+          <div className="w-12 h-12 bg-zen-red/5 rounded-xl flex items-center justify-center group-hover:bg-zen-red group-hover:text-white transition-all">
+            <Cpu className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold">Fast Processing</h3>
+          <p className="text-sm text-gray-400">Optimized search algorithms capable of handling thousands of lines in milliseconds.</p>
+        </div>
+        <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-4 hover:border-zen-red/30 transition-all group">
+          <div className="w-12 h-12 bg-zen-red/5 rounded-xl flex items-center justify-center group-hover:bg-zen-red group-hover:text-white transition-all">
+            <FileText className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold">Keyword Registry</h3>
+          <p className="text-sm text-gray-400">Save and manage your most used keywords for quick access during extraction.</p>
+        </div>
+        <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-4 hover:border-zen-red/30 transition-all group">
+          <div className="w-12 h-12 bg-zen-red/5 rounded-xl flex items-center justify-center group-hover:bg-zen-red group-hover:text-white transition-all">
+            <Download className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold">Export Ready</h3>
+          <p className="text-sm text-gray-400">One-click copy or download your results in clean text format instantly.</p>
+        </div>
+      </div>
+
+      <div id="pricing" className="bg-zen-ink text-white rounded-3xl p-12 relative overflow-hidden shadow-2xl">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-zen-red/20 rounded-full blur-[100px] -mr-32 -mt-32" />
+        <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-8">
+          <div className="space-y-4">
+            <div className="inline-block px-3 py-1 bg-zen-red text-[10px] font-bold uppercase tracking-widest rounded-full">
+              Limited Offer
+            </div>
+            <h2 className="text-4xl font-bold">Premium Access</h2>
+            <p className="text-gray-400 max-w-md">Unlock the full potential of Omni Searcher with lifetime cloud storage and unlimited keywords.</p>
+          </div>
+          <div className="text-center md:text-right space-y-4">
+            <div className="text-5xl font-bold text-zen-red">100₱</div>
+            <div className="text-sm font-bold uppercase tracking-widest text-gray-400">Lifetime Access</div>
+            <a 
+              href="https://t.me/ItsMeJeff"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block w-full md:w-auto px-8 py-4 bg-white text-zen-ink rounded-xl font-bold text-sm tracking-widest hover:bg-zen-red hover:text-white transition-all text-center"
+            >
+              GET STARTED NOW
+            </a>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+
   if (isCheckingLink) {
     return (
       <div className="min-h-screen bg-zen-bg flex items-center justify-center">
@@ -446,9 +597,349 @@ export default function App() {
   return (
     <div className="min-h-screen bg-zen-bg text-zen-ink font-sans selection:bg-zen-red/10 relative overflow-x-hidden">
       <SakuraBackground />
+
+      {/* Global Header */}
+      <header className="border-b border-zen-border bg-white/40 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-4xl mx-auto px-6 py-6 flex items-center justify-between">
+          <div className="flex items-center gap-4 cursor-pointer" onClick={() => setCurrentView('home')}>
+            <div className="w-12 h-12 bg-zen-red flex items-center justify-center rounded-sm shadow-sm">
+              <span className="text-white font-bold text-xl">オ</span>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-zen-ink">Omni Searcher</h1>
+              <p className="text-[10px] text-zen-red/60 font-medium uppercase tracking-[0.2em]">オムニ・サーチャー</p>
+            </div>
+          </div>
+          
+          <nav className="hidden md:flex items-center gap-8">
+            <button 
+              onClick={() => setCurrentView('home')}
+              className={`text-[10px] font-bold uppercase tracking-widest transition-all ${currentView === 'home' ? 'text-zen-red' : 'text-zen-ink/40 hover:text-zen-ink'}`}
+            >
+              Home
+            </button>
+            <button 
+              onClick={() => {
+                setCurrentView('home');
+                setTimeout(() => {
+                  document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+              }}
+              className="text-[10px] font-bold uppercase tracking-widest text-zen-ink/40 hover:text-zen-red transition-all"
+            >
+              Pricing
+            </button>
+            <button 
+              onClick={() => setCurrentView('admin')}
+              className={`text-[10px] font-bold uppercase tracking-widest transition-all ${currentView === 'admin' ? 'text-zen-red' : 'text-zen-ink/40 hover:text-zen-red'}`}
+            >
+              Owner Panel
+            </button>
+          </nav>
+
+          <div className="flex items-center gap-4">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-white border border-zen-border rounded-full">
+              {isSyncing ? (
+                <RefreshCw className="w-3 h-3 text-zen-indigo animate-spin" />
+              ) : lastSync ? (
+                <Cloud className="w-3 h-3 text-zen-red" />
+              ) : (
+                <CloudOff className="w-3 h-3 text-gray-300" />
+              )}
+              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+                {isSyncing ? 'Syncing' : lastSync ? 'Cloud Active' : 'Offline'}
+              </span>
+            </div>
+            <button 
+              onClick={() => setCurrentView('admin')}
+              className="md:hidden p-2 hover:bg-zen-red/5 rounded-full transition-all text-zen-ink/40 hover:text-zen-red"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      </header>
       
       <AnimatePresence mode="wait">
-        {!isVerified ? (
+        {currentView === 'home' ? (
+          <HomeView key="home" />
+        ) : currentView === 'admin' ? (
+          <motion.div
+            key="admin"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="max-w-4xl mx-auto px-6 py-12 space-y-12 relative z-10"
+          >
+            <div className="bg-white border border-zen-border rounded-2xl shadow-2xl overflow-hidden">
+              <div className="p-8 border-b border-zen-border flex items-center justify-between bg-gray-50/50">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-zen-ink flex items-center justify-center rounded-sm">
+                    <Settings className="w-5 h-5 text-white" />
+                  </div>
+                  <h2 className="text-xl font-bold text-zen-ink tracking-tight">System Configuration</h2>
+                </div>
+              </div>
+
+              <div className="p-8">
+                {!isAuthorized ? (
+                  <div className="max-w-sm mx-auto py-16">
+                    <form onSubmit={handleLogin} className="space-y-6">
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Authentication Key</label>
+                        <div className="relative">
+                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" />
+                          <input 
+                            type="password"
+                            value={passwordInput}
+                            onChange={(e) => setPasswordInput(e.target.value)}
+                            placeholder="••••••••"
+                            className={`w-full bg-gray-50 border ${loginError ? 'border-zen-red' : 'border-zen-border'} rounded-lg py-4 pl-12 pr-4 text-sm focus:border-zen-red outline-none transition-all`}
+                          />
+                        </div>
+                        {loginError && (
+                          <p className="text-[10px] text-zen-red font-bold uppercase tracking-widest">Access Denied</p>
+                        )}
+                      </div>
+                      <button 
+                        type="submit"
+                        className="w-full py-4 bg-zen-ink text-white rounded-lg font-bold text-xs tracking-widest hover:bg-zen-red transition-all"
+                      >
+                        UNLOCK SYSTEM
+                      </button>
+                    </form>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                    <div className="space-y-8">
+                      {/* Stats Overview */}
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="p-4 bg-white border border-zen-border rounded-xl shadow-sm">
+                          <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">Total Stock</div>
+                          <div className="text-xl font-bold text-zen-ink">{totalLinesInSource.toLocaleString()}</div>
+                        </div>
+                        <div className="p-4 bg-white border border-zen-border rounded-xl shadow-sm">
+                          <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">Active Links</div>
+                          <div className="text-xl font-bold text-zen-indigo">{shareLinksList.filter(l => !l.is_used).length}</div>
+                        </div>
+                        <div className="p-4 bg-white border border-zen-border rounded-xl shadow-sm">
+                          <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">Used Links</div>
+                          <div className="text-xl font-bold text-zen-red">{shareLinksList.filter(l => l.is_used).length}</div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Global Stock</h3>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => saveToCloud('stock', { content: input })}
+                              className="flex items-center gap-2 px-4 py-2 bg-zen-ink text-white hover:bg-zen-red rounded-lg text-[10px] font-bold transition-all shadow-sm"
+                            >
+                              <Save className="w-3 h-3" /> SAVE TO CLOUD
+                            </button>
+                            <input
+                              type="file"
+                              ref={fileInputRef}
+                              onChange={handleFileUpload}
+                              className="hidden"
+                              accept=".txt,.csv,.log"
+                            />
+                            <button
+                              onClick={() => fileInputRef.current?.click()}
+                              className="flex items-center gap-2 px-4 py-2 bg-zen-red/5 text-zen-red hover:bg-zen-red hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-red/20"
+                            >
+                              <Upload className="w-3 h-3" /> UPLOAD
+                            </button>
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <textarea
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            placeholder="Input raw data here..."
+                            className="w-full h-80 bg-gray-50 border border-zen-border rounded-lg p-5 text-xs font-mono focus:border-zen-red outline-none transition-all resize-none"
+                          />
+                          <div className="absolute bottom-4 right-4 flex items-center gap-3">
+                            <span className="text-[9px] font-bold text-gray-400 bg-white px-2 py-1 rounded border border-zen-border">
+                              {totalLinesInSource} LINES
+                            </span>
+                            <button
+                              onClick={handleClear}
+                              className="p-2 bg-white hover:bg-zen-red/10 text-gray-400 hover:text-zen-red rounded-lg transition-all border border-zen-border"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <button 
+                          onClick={resetKeywords}
+                          className="flex-1 py-3 bg-gray-50 text-gray-400 hover:bg-zen-red/5 hover:text-zen-red rounded-lg text-[10px] font-bold transition-all border border-zen-border"
+                        >
+                          RESET SYSTEM
+                        </button>
+                        <button 
+                          onClick={() => setIsAuthorized(false)}
+                          className="flex-1 py-3 bg-zen-ink text-white rounded-lg text-[10px] font-bold transition-all"
+                        >
+                          LOCK PANEL
+                        </button>
+                      </div>
+
+                      {/* Anti-Leak Share Section */}
+                      <div className="p-6 bg-gray-50 border border-zen-border rounded-lg space-y-6">
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Anti-Leak Sharing</h3>
+                            <button
+                              onClick={generateShareLink}
+                              className="flex items-center gap-2 px-4 py-2 bg-zen-indigo/5 text-zen-indigo hover:bg-zen-indigo hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-indigo/20"
+                            >
+                              <Share2 className="w-3 h-3" /> GENERATE LINK
+                            </button>
+                          </div>
+                          <p className="text-[9px] text-gray-400 leading-relaxed">
+                            Generate a secure link that locks to the first device that opens it. Perfect for preventing unauthorized redistribution.
+                          </p>
+                          {shareLink && (
+                            <div className="p-3 bg-white border border-zen-border rounded-lg flex items-center gap-3">
+                              <input 
+                                readOnly 
+                                value={shareLink}
+                                className="flex-1 bg-transparent text-[10px] text-gray-500 font-mono outline-none"
+                              />
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(shareLink);
+                                  setCopied(true);
+                                  setTimeout(() => setCopied(false), 2000);
+                                }}
+                                className="text-zen-red hover:text-zen-red/80 p-1"
+                              >
+                                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Link Logs */}
+                        <div className="space-y-4 pt-4 border-t border-zen-border">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Link Logs</h3>
+                            <div className="flex items-center gap-3">
+                              <span className="text-[9px] font-bold text-gray-400">{shareLinksList.length} TOTAL</span>
+                              <button 
+                                onClick={clearAllLinks}
+                                className="text-[8px] font-bold text-zen-red hover:underline uppercase tracking-widest"
+                              >
+                                Clear All
+                              </button>
+                            </div>
+                          </div>
+                          <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                            {shareLinksList.length > 0 ? (
+                              shareLinksList.map((link) => (
+                                <div key={link.id} className="p-3 bg-white border border-zen-border rounded-lg flex items-center justify-between group">
+                                  <div className="space-y-1 overflow-hidden">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-mono text-zen-ink truncate max-w-[120px]">{link.id}</span>
+                                      <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase ${link.is_used ? 'bg-zen-red/10 text-zen-red' : 'bg-green-50 text-green-600'}`}>
+                                        {link.is_used ? 'USED' : 'UNUSED'}
+                                      </span>
+                                    </div>
+                                    <div className="text-[8px] text-gray-400 flex items-center gap-2">
+                                      <span>{new Date(link.created_at).toLocaleDateString()}</span>
+                                      {link.device_id && (
+                                        <span className="truncate max-w-[100px]">ID: {link.device_id}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                      onClick={() => {
+                                        const url = new URL(window.location.href);
+                                        url.searchParams.set('sl', link.id);
+                                        navigator.clipboard.writeText(url.toString());
+                                        setCopied(true);
+                                        setTimeout(() => setCopied(false), 2000);
+                                      }}
+                                      className="p-1.5 hover:bg-gray-100 rounded text-gray-400 hover:text-zen-ink"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      onClick={() => deleteShareLink(link.id)}
+                                      className="p-1.5 hover:bg-zen-red/10 rounded text-gray-400 hover:text-zen-red"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="py-8 text-center border border-dashed border-zen-border rounded-lg">
+                                <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">No links generated</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-8">
+                      <div className="space-y-4">
+                        <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Keyword Registry</h3>
+                        <div className="space-y-2 max-h-[240px] overflow-y-auto pr-2 custom-scrollbar">
+                          {keywords.map((kw, i) => (
+                            <div key={i} className="flex items-center justify-between p-4 bg-gray-50 border border-zen-border rounded-lg group">
+                              <div>
+                                <div className="text-xs font-bold text-zen-ink">{kw.label}</div>
+                                <div className="text-[9px] font-mono text-gray-400 mt-0.5">{kw.value}</div>
+                              </div>
+                              <button 
+                                onClick={() => deleteKeyword(i)}
+                                className="p-2 text-gray-300 hover:text-zen-red transition-all opacity-0 group-hover:opacity-100"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-4 p-6 bg-gray-50 rounded-lg border border-zen-border">
+                        <h4 className="text-[10px] font-bold text-zen-red uppercase tracking-widest">Register New</h4>
+                        <div className="space-y-3">
+                          <input 
+                            value={newLabel}
+                            onChange={(e) => setNewLabel(e.target.value)}
+                            placeholder="Label (e.g. Codm)"
+                            className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red"
+                          />
+                          <input 
+                            value={newValue}
+                            onChange={(e) => setNewValue(e.target.value)}
+                            placeholder="Value (e.g. garena.com)"
+                            className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red"
+                          />
+                          <button 
+                            onClick={addKeyword}
+                            className="w-full py-3 bg-zen-red text-white rounded-lg text-[10px] font-bold tracking-widest transition-all shadow-md shadow-zen-red/10"
+                          >
+                            ADD TO REGISTRY
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        ) : currentView === 'searcher' && !isVerified ? (
           <motion.div
             key="verify"
             initial={{ opacity: 0 }}
@@ -515,16 +1006,7 @@ export default function App() {
                 Protected by Cloudflare Turnstile
               </p>
 
-              <button 
-                onClick={() => setIsVerified(true)}
-                className={`text-[8px] uppercase tracking-widest transition-all px-4 py-2 rounded-full border ${
-                  verificationError 
-                    ? 'bg-zen-red text-white border-zen-red animate-pulse' 
-                    : 'text-gray-200 hover:text-zen-red border-transparent hover:border-zen-red/20'
-                }`}
-              >
-                {verificationError ? 'Bypass Security Check' : 'Skip Verification (Preview Mode)'}
-              </button>
+              {/* Buttons removed per user request: "Removed The Buttons Below Make Please By Link" */}
             </div>
           </motion.div>
         ) : (
@@ -534,42 +1016,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             className="relative z-10"
           >
-            {/* Header */}
-            <header className="border-b border-zen-border bg-white/40 backdrop-blur-md sticky top-0 z-20">
-        <div className="max-w-4xl mx-auto px-6 py-6 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-zen-red flex items-center justify-center rounded-sm shadow-sm">
-              <span className="text-white font-bold text-xl">オ</span>
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-zen-ink">Omni Searcher</h1>
-              <p className="text-[10px] text-zen-red/60 font-medium uppercase tracking-[0.2em]">オムニ・サーチャー</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-white border border-zen-border rounded-full">
-              {isSyncing ? (
-                <RefreshCw className="w-3 h-3 text-zen-indigo animate-spin" />
-              ) : lastSync ? (
-                <Cloud className="w-3 h-3 text-zen-red" />
-              ) : (
-                <CloudOff className="w-3 h-3 text-gray-300" />
-              )}
-              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
-                {isSyncing ? 'Syncing' : lastSync ? 'Cloud Active' : 'Offline'}
-              </span>
-            </div>
-            <button 
-              onClick={() => setIsAdminOpen(true)}
-              className="p-2 hover:bg-zen-red/5 rounded-full transition-all text-zen-ink/40 hover:text-zen-red"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-4xl mx-auto px-6 py-12 space-y-12 relative z-10">
+            <main className="max-w-4xl mx-auto px-6 py-12 space-y-12 relative z-10">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-12">
           {/* Left Column: Controls */}
           <div className="md:col-span-4 space-y-8">
@@ -714,226 +1161,29 @@ export default function App() {
           </div>
         </div>
       </main>
-
-      {/* Admin Panel Modal */}
-      <AnimatePresence>
-        {isAdminOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsAdminOpen(false)}
-              className="absolute inset-0 bg-zen-ink/40 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              className="relative w-full max-w-3xl bg-white border border-zen-border rounded-lg shadow-2xl overflow-hidden"
-            >
-              <div className="p-8 border-b border-zen-border flex items-center justify-between bg-gray-50/50">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-zen-ink flex items-center justify-center rounded-sm">
-                    <Settings className="w-5 h-5 text-white" />
-                  </div>
-                  <h2 className="text-xl font-bold text-zen-ink tracking-tight">System Configuration</h2>
-                </div>
-                <button 
-                  onClick={() => setIsAdminOpen(false)}
-                  className="p-2 hover:bg-zen-red/5 rounded-full transition-all text-gray-400 hover:text-zen-red"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-
-              <div className="p-8 max-h-[75vh] overflow-y-auto custom-scrollbar">
-                {!isAuthorized ? (
-                  <div className="max-w-sm mx-auto py-16">
-                    <form onSubmit={handleLogin} className="space-y-6">
-                      <div className="space-y-3">
-                        <label className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Authentication Key</label>
-                        <div className="relative">
-                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" />
-                          <input 
-                            type="password"
-                            value={passwordInput}
-                            onChange={(e) => setPasswordInput(e.target.value)}
-                            placeholder="••••••••"
-                            className={`w-full bg-gray-50 border ${loginError ? 'border-zen-red' : 'border-zen-border'} rounded-lg py-4 pl-12 pr-4 text-sm focus:border-zen-red outline-none transition-all`}
-                          />
-                        </div>
-                        {loginError && (
-                          <p className="text-[10px] text-zen-red font-bold uppercase tracking-widest">Access Denied</p>
-                        )}
-                      </div>
-                      <button 
-                        type="submit"
-                        className="w-full py-4 bg-zen-ink text-white rounded-lg font-bold text-xs tracking-widest hover:bg-zen-red transition-all"
-                      >
-                        UNLOCK SYSTEM
-                      </button>
-                    </form>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-                    <div className="space-y-8">
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Global Stock</h3>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="file"
-                              ref={fileInputRef}
-                              onChange={handleFileUpload}
-                              className="hidden"
-                              accept=".txt,.csv,.log"
-                            />
-                            <button
-                              onClick={() => fileInputRef.current?.click()}
-                              className="flex items-center gap-2 px-4 py-2 bg-zen-red/5 text-zen-red hover:bg-zen-red hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-red/20"
-                            >
-                              <Upload className="w-3 h-3" /> UPLOAD FILE
-                            </button>
-                          </div>
-                        </div>
-                        <div className="relative">
-                          <textarea
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            placeholder="Input raw data here..."
-                            className="w-full h-80 bg-gray-50 border border-zen-border rounded-lg p-5 text-xs font-mono focus:border-zen-red outline-none transition-all resize-none"
-                          />
-                          <div className="absolute bottom-4 right-4 flex items-center gap-3">
-                            <span className="text-[9px] font-bold text-gray-400 bg-white px-2 py-1 rounded border border-zen-border">
-                              {totalLinesInSource} LINES
-                            </span>
-                            <button
-                              onClick={handleClear}
-                              className="p-2 bg-white hover:bg-zen-red/10 text-gray-400 hover:text-zen-red rounded-lg transition-all border border-zen-border"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-3">
-                        <button 
-                          onClick={resetKeywords}
-                          className="flex-1 py-3 bg-gray-50 text-gray-400 hover:bg-zen-red/5 hover:text-zen-red rounded-lg text-[10px] font-bold transition-all border border-zen-border"
-                        >
-                          RESET SYSTEM
-                        </button>
-                        <button 
-                          onClick={() => setIsAuthorized(false)}
-                          className="flex-1 py-3 bg-zen-ink text-white rounded-lg text-[10px] font-bold transition-all"
-                        >
-                          LOCK PANEL
-                        </button>
-                      </div>
-
-                      {/* Anti-Leak Share Section */}
-                      <div className="p-6 bg-gray-50 border border-zen-border rounded-lg space-y-4">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Anti-Leak Sharing</h3>
-                          <button
-                            onClick={generateShareLink}
-                            className="flex items-center gap-2 px-4 py-2 bg-zen-indigo/5 text-zen-indigo hover:bg-zen-indigo hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-indigo/20"
-                          >
-                            <Share2 className="w-3 h-3" /> GENERATE LINK
-                          </button>
-                        </div>
-                        <p className="text-[9px] text-gray-400 leading-relaxed">
-                          Generate a secure link that locks to the first device that opens it. Perfect for preventing unauthorized redistribution.
-                        </p>
-                        {shareLink && (
-                          <div className="p-3 bg-white border border-zen-border rounded-lg flex items-center gap-3">
-                            <input 
-                              readOnly 
-                              value={shareLink}
-                              className="flex-1 bg-transparent text-[10px] text-gray-500 font-mono outline-none"
-                            />
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(shareLink);
-                                setCopied(true);
-                                setTimeout(() => setCopied(false), 2000);
-                              }}
-                              className="text-zen-red hover:text-zen-red/80 p-1"
-                            >
-                              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-8">
-                      <div className="space-y-4">
-                        <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Keyword Registry</h3>
-                        <div className="space-y-2 max-h-[240px] overflow-y-auto pr-2 custom-scrollbar">
-                          {keywords.map((kw, i) => (
-                            <div key={i} className="flex items-center justify-between p-4 bg-gray-50 border border-zen-border rounded-lg group">
-                              <div>
-                                <div className="text-xs font-bold text-zen-ink">{kw.label}</div>
-                                <div className="text-[9px] font-mono text-gray-400 mt-0.5">{kw.value}</div>
-                              </div>
-                              <button 
-                                onClick={() => deleteKeyword(i)}
-                                className="p-2 text-gray-300 hover:text-zen-red transition-all opacity-0 group-hover:opacity-100"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="space-y-4 p-6 bg-gray-50 rounded-lg border border-zen-border">
-                        <h4 className="text-[10px] font-bold text-zen-red uppercase tracking-widest">Register New</h4>
-                        <div className="space-y-3">
-                          <input 
-                            value={newLabel}
-                            onChange={(e) => setNewLabel(e.target.value)}
-                            placeholder="Label (e.g. Codm)"
-                            className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red"
-                          />
-                          <input 
-                            value={newValue}
-                            onChange={(e) => setNewValue(e.target.value)}
-                            placeholder="Value (e.g. garena.com)"
-                            className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red"
-                          />
-                          <button 
-                            onClick={addKeyword}
-                            className="w-full py-3 bg-zen-red text-white rounded-lg text-[10px] font-bold tracking-widest transition-all shadow-md shadow-zen-red/10"
-                          >
-                            ADD TO REGISTRY
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
       {/* Footer */}
       <footer className="max-w-4xl mx-auto px-6 py-16 border-t border-zen-border flex flex-col md:flex-row items-center justify-between gap-8 text-gray-400">
         <div className="flex items-center gap-8 text-[10px] font-bold uppercase tracking-[0.2em]">
-          <span className="hover:text-zen-red transition-colors cursor-pointer">Guide</span>
-          <span className="hover:text-zen-red transition-colors cursor-pointer">Status</span>
-          <span className="hover:text-zen-red transition-colors cursor-pointer">Terms</span>
+          <span onClick={() => setCurrentView('home')} className="hover:text-zen-red transition-colors cursor-pointer">Home</span>
+          <span onClick={() => setCurrentView('admin')} className="hover:text-zen-red transition-colors cursor-pointer">Owner Panel</span>
+          <span 
+            onClick={() => {
+              setCurrentView('home');
+              setTimeout(() => {
+                document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' });
+              }, 100);
+            }} 
+            className="hover:text-zen-red transition-colors cursor-pointer"
+          >
+            Pricing
+          </span>
         </div>
         <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-zen-red/30">Omni Searcher • オムニ・サーチャー</p>
       </footer>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
