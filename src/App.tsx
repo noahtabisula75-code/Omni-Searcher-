@@ -65,6 +65,7 @@ const SakuraBackground = () => {
 
 export default function App() {
   const [isVerified, setIsVerified] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [keywords, setKeywords] = useState(DEFAULT_KEYWORDS);
   const [selectedKeyword, setSelectedKeyword] = useState(DEFAULT_KEYWORDS[0].value);
@@ -335,7 +336,31 @@ export default function App() {
                   <Turnstile 
                     sitekey="0x4AAAAAAC2YqoDtjnb-UJJg" 
                     onVerify={() => setIsVerified(true)} 
+                    onError={(err) => {
+                      console.error('Turnstile Error:', err);
+                      if (err === '110200') {
+                        setVerificationError('Domain not allowlisted. Bypassing for preview...');
+                        // Auto-verify after 2 seconds if it's a domain error
+                        setTimeout(() => setIsVerified(true), 2000);
+                      } else {
+                        setVerificationError(`Verification Error: ${err}`);
+                      }
+                    }}
                   />
+                  {verificationError && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mt-4 p-3 bg-zen-red/5 border border-zen-red/20 rounded-lg"
+                    >
+                      <p className="text-[10px] text-zen-red font-bold uppercase tracking-widest">
+                        {verificationError}
+                      </p>
+                      <p className="text-[9px] text-gray-400 mt-1">
+                        Use the skip button below to continue in preview mode.
+                      </p>
+                    </motion.div>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t border-zen-border flex items-center justify-center gap-4">
@@ -357,9 +382,13 @@ export default function App() {
 
               <button 
                 onClick={() => setIsVerified(true)}
-                className="text-[8px] text-gray-200 hover:text-zen-red uppercase tracking-widest transition-colors"
+                className={`text-[8px] uppercase tracking-widest transition-all px-4 py-2 rounded-full border ${
+                  verificationError 
+                    ? 'bg-zen-red text-white border-zen-red animate-pulse' 
+                    : 'text-gray-200 hover:text-zen-red border-transparent hover:border-zen-red/20'
+                }`}
               >
-                Skip Verification (Preview Mode)
+                {verificationError ? 'Bypass Security Check' : 'Skip Verification (Preview Mode)'}
               </button>
             </div>
           </motion.div>

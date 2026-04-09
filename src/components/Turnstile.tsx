@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 interface TurnstileProps {
   sitekey: string;
   onVerify: (token: string) => void;
+  onError?: (error: any) => void;
 }
 
 declare global {
@@ -15,7 +16,7 @@ declare global {
   }
 }
 
-export const Turnstile = ({ sitekey, onVerify }: TurnstileProps) => {
+export const Turnstile = ({ sitekey, onVerify, onError }: TurnstileProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string | null>(null);
 
@@ -30,11 +31,15 @@ export const Turnstile = ({ sitekey, onVerify }: TurnstileProps) => {
             callback: (token: string) => {
               onVerify(token);
             },
+            'error-callback': (error: any) => {
+              if (onError) onError(error);
+            },
             theme: 'light',
           });
         }
       } catch (err) {
         console.error('Turnstile render error:', err);
+        if (onError) onError(err);
       }
     };
 
