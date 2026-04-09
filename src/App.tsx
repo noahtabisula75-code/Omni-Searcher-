@@ -4,9 +4,10 @@
  */
 
 import { useState, useMemo, useEffect, useRef, useCallback, ChangeEvent, FormEvent } from 'react';
-import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings, X, Plus, Upload, Cloud, CloudOff, RefreshCw, Download } from 'lucide-react';
+import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings, X, Plus, Upload, Cloud, CloudOff, RefreshCw, Download, ShieldCheck, Cpu } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
+import { Turnstile } from './components/Turnstile';
 
 const DEFAULT_KEYWORDS = [
   { label: 'supercell.com -', value: 'supercell.com' },
@@ -63,6 +64,7 @@ const SakuraBackground = () => {
 };
 
 export default function App() {
+  const [isVerified, setIsVerified] = useState(false);
   const [input, setInput] = useState('');
   const [keywords, setKeywords] = useState(DEFAULT_KEYWORDS);
   const [selectedKeyword, setSelectedKeyword] = useState(DEFAULT_KEYWORDS[0].value);
@@ -300,8 +302,76 @@ export default function App() {
     <div className="min-h-screen bg-zen-bg text-zen-ink font-sans selection:bg-zen-red/10 relative overflow-x-hidden">
       <SakuraBackground />
       
-      {/* Header */}
-      <header className="border-b border-zen-border bg-white/40 backdrop-blur-md sticky top-0 z-20">
+      <AnimatePresence mode="wait">
+        {!isVerified ? (
+          <motion.div
+            key="verify"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-zen-bg"
+          >
+            <div className="w-full max-w-md p-8 space-y-8 text-center">
+              <div className="relative inline-block">
+                <div className="w-24 h-24 bg-zen-ink rounded-2xl flex items-center justify-center shadow-2xl rotate-3">
+                  <Cpu className="w-12 h-12 text-white" />
+                </div>
+                <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-zen-red rounded-lg flex items-center justify-center shadow-lg -rotate-12">
+                  <ShieldCheck className="w-6 h-6 text-white" />
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <h2 className="text-3xl font-bold tracking-tight text-zen-ink">Security Check</h2>
+                <p className="text-[10px] text-zen-red font-bold uppercase tracking-[0.3em]">System Verification Required</p>
+              </div>
+
+              <div className="p-8 bg-white border border-zen-border rounded-2xl shadow-sm space-y-6">
+                <p className="text-xs text-gray-400 leading-relaxed">
+                  To access the <span className="text-zen-ink font-bold">Omni Searcher</span> terminal, please complete the Cloudflare verification below.
+                </p>
+                
+                <div className="py-4">
+                  <Turnstile 
+                    sitekey="0x4AAAAAAC2YqoDtjnb-UJJg" 
+                    onVerify={() => setIsVerified(true)} 
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-zen-border flex items-center justify-center gap-4">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1 h-1 bg-zen-red rounded-full animate-pulse" />
+                    <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Encrypted</span>
+                  </div>
+                  <div className="w-px h-3 bg-zen-border" />
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1 h-1 bg-zen-indigo rounded-full animate-pulse" />
+                    <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Secure Node</span>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-[9px] font-bold text-gray-300 uppercase tracking-[0.2em]">
+                Protected by Cloudflare Turnstile
+              </p>
+
+              <button 
+                onClick={() => setIsVerified(true)}
+                className="text-[8px] text-gray-200 hover:text-zen-red uppercase tracking-widest transition-colors"
+              >
+                Skip Verification (Preview Mode)
+              </button>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="app"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative z-10"
+          >
+            {/* Header */}
+            <header className="border-b border-zen-border bg-white/40 backdrop-blur-md sticky top-0 z-20">
         <div className="max-w-4xl mx-auto px-6 py-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-zen-red flex items-center justify-center rounded-sm shadow-sm">
@@ -662,6 +732,9 @@ export default function App() {
         </div>
         <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-zen-red/30">Omni Searcher • オムニ・サーチャー</p>
       </footer>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
