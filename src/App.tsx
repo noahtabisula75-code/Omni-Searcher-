@@ -97,6 +97,8 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [deviceId, setDeviceId] = useState<string>('');
 
+  const [showSqlHelper, setShowSqlHelper] = useState(false);
+
   // Handle Auth
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -126,7 +128,8 @@ export default function App() {
           .single();
 
         if (error || !linkData) {
-          setVerificationError('Invalid share link.');
+          console.error('Link Validation Error:', error);
+          setVerificationError(error ? `Database Error: ${error.message}` : 'Invalid share link. This link does not exist in the database.');
           setIsLinkLocked(true);
         } else {
           if (linkData.is_used && linkData.device_id !== currentDeviceId) {
@@ -207,17 +210,19 @@ export default function App() {
           is_used: false
         });
       
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase Insert Error:', error);
+        alert(`Failed to save link to database: ${error.message}. Make sure your 'share_links' table is created.`);
+        return;
+      }
 
       const url = new URL(window.location.href);
       url.searchParams.set('sl', linkId);
       setShareLink(url.toString());
       fetchShareLinks(); // Refresh list
-    } catch (error) {
-      console.error('Supabase Error:', error);
-      const url = new URL(window.location.href);
-      url.searchParams.set('sl', linkId);
-      setShareLink(url.toString());
+    } catch (error: any) {
+      console.error('Link Generation Error:', error);
+      alert(`System Error: ${error.message || 'Could not connect to database'}`);
     }
   };
 
@@ -794,16 +799,55 @@ export default function App() {
                         <div className="space-y-4">
                           <div className="flex items-center justify-between">
                             <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Anti-Leak Sharing</h3>
-                            <button
-                              onClick={generateShareLink}
-                              className="flex items-center gap-2 px-4 py-2 bg-zen-indigo/5 text-zen-indigo hover:bg-zen-indigo hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-indigo/20"
-                            >
-                              <Share2 className="w-3 h-3" /> GENERATE LINK
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setShowSqlHelper(!showSqlHelper)}
+                                className="text-[8px] font-bold text-zen-indigo hover:underline uppercase tracking-widest"
+                              >
+                                DB Setup
+                              </button>
+                              <button
+                                onClick={generateShareLink}
+                                className="flex items-center gap-2 px-4 py-2 bg-zen-indigo/5 text-zen-indigo hover:bg-zen-indigo hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-indigo/20"
+                              >
+                                <Share2 className="w-3 h-3" /> GENERATE LINK
+                              </button>
+                            </div>
                           </div>
                           <p className="text-[9px] text-gray-400 leading-relaxed">
                             Generate a secure link that locks to the first device that opens it. Perfect for preventing unauthorized redistribution.
                           </p>
+
+                          {showSqlHelper && (
+                            <div className="p-4 bg-zen-ink text-white rounded-lg space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[9px] font-bold uppercase tracking-widest text-zen-red">SQL Schema Required</span>
+                                <button onClick={() => setShowSqlHelper(false)} className="text-white/40 hover:text-white"><X className="w-3 h-3" /></button>
+                              </div>
+                              <p className="text-[8px] text-gray-400">Run this in your Supabase SQL Editor to enable links:</p>
+                              <pre className="text-[8px] font-mono bg-black/30 p-3 rounded overflow-x-auto custom-scrollbar">
+{`CREATE TABLE IF NOT EXISTS share_links (
+  id TEXT PRIMARY KEY,
+  is_used BOOLEAN DEFAULT FALSE,
+  device_id TEXT,
+  created_by UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE share_links ENABLE ROW LEVEL SECURITY;
+
+-- Allow public read for validation
+CREATE POLICY "Allow public read" ON share_links FOR SELECT USING (true);
+
+-- Allow public insert for generation (or restrict to auth)
+CREATE POLICY "Allow public insert" ON share_links FOR INSERT WITH CHECK (true);
+
+-- Allow public update for claiming
+CREATE POLICY "Allow public update" ON share_links FOR UPDATE USING (true);`}
+                              </pre>
+                            </div>
+                          )}
                           {shareLink && (
                             <div className="p-3 bg-white border border-zen-border rounded-lg flex items-center gap-3">
                               <input 
