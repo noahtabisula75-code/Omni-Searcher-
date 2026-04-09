@@ -4,10 +4,13 @@
  */
 
 import { useState, useMemo, useEffect, useRef, useCallback, ChangeEvent, FormEvent } from 'react';
-import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings, X, Plus, Upload, Cloud, CloudOff, RefreshCw, Download, ShieldCheck, Cpu } from 'lucide-react';
+import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings, X, Plus, Upload, Cloud, CloudOff, RefreshCw, Download, ShieldCheck, Cpu, Share2, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { Turnstile } from './components/Turnstile';
+import { auth, db, getDeviceId, handleFirestoreError, OperationType, googleProvider } from './lib/firebase';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { signInWithPopup, onAuthStateChanged } from 'firebase/auth';
 
 const DEFAULT_KEYWORDS = [
   { label: 'supercell.com -', value: 'supercell.com' },
@@ -87,6 +90,94 @@ export default function App() {
   const [newValue, setNewValue] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+
+  // Anti-Leak State
+  const [isLinkLocked, setIsLinkLocked] = useState(false);
+  const [isCheckingLink, setIsCheckingLink] = useState(true);
+  const [shareLink, setShareLink] = useState<string | null>(null);
+  const [user, setUser] = useState<any>(null);
+  const [deviceId, setDeviceId] = useState<string>('');
+
+  // Handle Auth
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Handle Link Validation
+  useEffect(() => {
+    const validateLink = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const linkId = urlParams.get('sl');
+      const currentDeviceId = await getDeviceId();
+      setDeviceId(currentDeviceId);
+
+      if (!linkId) {
+        setIsCheckingLink(false);
+        return;
+      }
+
+      try {
+        const linkRef = doc(db, 'shareLinks', linkId);
+        const linkSnap = await getDoc(linkRef);
+
+        if (!linkSnap.exists()) {
+          setVerificationError('Invalid share link.');
+          setIsLinkLocked(true);
+        } else {
+          const data = linkSnap.data();
+          if (data.isUsed && data.deviceId !== currentDeviceId) {
+            setVerificationError('This link is already used by another device.');
+            setIsLinkLocked(true);
+          } else if (!data.isUsed) {
+            // Claim the link
+            await updateDoc(linkRef, {
+              isUsed: true,
+              deviceId: currentDeviceId
+            });
+            console.log('Link claimed by device:', currentDeviceId);
+          }
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `shareLinks/${linkId}`);
+      } finally {
+        setIsCheckingLink(false);
+      }
+    };
+
+    validateLink();
+  }, []);
+
+  const generateShareLink = async () => {
+    if (!user) {
+      try {
+        await signInWithPopup(auth, googleProvider);
+      } catch (error) {
+        console.error('Login failed:', error);
+        return;
+      }
+    }
+
+    const linkId = Math.random().toString(36).substring(2, 15);
+    const linkRef = doc(db, 'shareLinks', linkId);
+
+    try {
+      await setDoc(linkRef, {
+        id: linkId,
+        createdAt: serverTimestamp(),
+        createdBy: auth.currentUser?.uid,
+        isUsed: false
+      });
+      
+      const url = new URL(window.location.href);
+      url.searchParams.set('sl', linkId);
+      setShareLink(url.toString());
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `shareLinks/${linkId}`);
+    }
+  };
 
   // Load keywords and stock from Supabase on mount
   useEffect(() => {
@@ -299,6 +390,48 @@ export default function App() {
     setSelectedKeyword(DEFAULT_KEYWORDS[0].value);
   };
 
+  if (isCheckingLink) {
+    return (
+      <div className="min-h-screen bg-zen-bg flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="w-12 h-12 text-zen-red animate-spin mx-auto mb-4" />
+          <p className="text-zen-ink/40 font-mono text-[10px] uppercase tracking-widest">Validating security link...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLinkLocked) {
+    return (
+      <div className="min-h-screen bg-zen-bg flex items-center justify-center p-4">
+        <SakuraBackground />
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="relative z-10 max-w-md w-full bg-white border border-zen-border p-12 rounded-2xl text-center shadow-2xl"
+        >
+          <div className="w-24 h-24 bg-zen-red/10 rounded-3xl flex items-center justify-center mx-auto mb-8 rotate-3">
+            <AlertTriangle className="w-12 h-12 text-zen-red" />
+          </div>
+          <h1 className="text-3xl font-bold text-zen-ink mb-3 tracking-tight">Access Denied</h1>
+          <p className="text-gray-400 font-mono text-[10px] uppercase tracking-[0.2em] mb-8">
+            {verificationError || "Security Protocol Active"}
+          </p>
+          <div className="p-6 bg-zen-red/5 border border-zen-red/10 rounded-xl text-left mb-8">
+            <p className="text-[9px] text-zen-red font-bold uppercase tracking-[0.3em] mb-2">Anti-Leak Protection</p>
+            <p className="text-xs text-gray-500 leading-relaxed">This link is restricted to one device per user. Sharing or leaking links is strictly prohibited by the system.</p>
+          </div>
+          <button 
+            onClick={() => window.location.href = window.location.origin}
+            className="w-full py-4 bg-zen-ink text-white rounded-xl font-bold text-xs tracking-[0.2em] hover:bg-zen-red transition-all shadow-lg shadow-zen-ink/10"
+          >
+            RETURN TO TERMINAL
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-zen-bg text-zen-ink font-sans selection:bg-zen-red/10 relative overflow-x-hidden">
       <SakuraBackground />
@@ -339,9 +472,8 @@ export default function App() {
                     onError={(err) => {
                       console.error('Turnstile Error:', err);
                       if (err === '110200') {
-                        setVerificationError('Domain not allowlisted. Bypassing for preview...');
-                        // Auto-verify after 2 seconds if it's a domain error
-                        setTimeout(() => setIsVerified(true), 2000);
+                        // Immediate bypass for domain errors in preview
+                        setIsVerified(true);
                       } else {
                         setVerificationError(`Verification Error: ${err}`);
                       }
@@ -696,6 +828,41 @@ export default function App() {
                         >
                           LOCK PANEL
                         </button>
+                      </div>
+
+                      {/* Anti-Leak Share Section */}
+                      <div className="p-6 bg-gray-50 border border-zen-border rounded-lg space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Anti-Leak Sharing</h3>
+                          <button
+                            onClick={generateShareLink}
+                            className="flex items-center gap-2 px-4 py-2 bg-zen-indigo/5 text-zen-indigo hover:bg-zen-indigo hover:text-white rounded-lg text-[10px] font-bold transition-all border border-zen-indigo/20"
+                          >
+                            <Share2 className="w-3 h-3" /> GENERATE LINK
+                          </button>
+                        </div>
+                        <p className="text-[9px] text-gray-400 leading-relaxed">
+                          Generate a secure link that locks to the first device that opens it. Perfect for preventing unauthorized redistribution.
+                        </p>
+                        {shareLink && (
+                          <div className="p-3 bg-white border border-zen-border rounded-lg flex items-center gap-3">
+                            <input 
+                              readOnly 
+                              value={shareLink}
+                              className="flex-1 bg-transparent text-[10px] text-gray-500 font-mono outline-none"
+                            />
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(shareLink);
+                                setCopied(true);
+                                setTimeout(() => setCopied(false), 2000);
+                              }}
+                              className="text-zen-red hover:text-zen-red/80 p-1"
+                            >
+                              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
 

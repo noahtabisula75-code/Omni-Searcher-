@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: shareLinks
+    // Document ID: {linkId}
+    // Fields:
+    //   - id: string (required) - Unique ID
+    //   - createdAt: timestamp (required) - Creation time
+    //   - createdBy: string (required) - UID of creator
+    //   - deviceId: string (optional) - ID of the device that claimed it
+    //   - isUsed: bool (required) - Usage status
+    //   - expiresAt: timestamp (optional) - Expiration
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidShareLink(data) {
+      return data.keys().hasAll(['id', 'createdAt', 'createdBy', 'isUsed']) &&
+             data.id is string &&
+             data.createdBy is string &&
+             data.isUsed is bool &&
+             (!('deviceId' in data) || data.deviceId is string);
+    }
+
+    match /shareLinks/{linkId} {
+      // Anyone can read a link to check its status (needed for the claim logic)
+      allow get: if true;
+      
+      // Only authenticated users can create links
+      allow create: if isAuthenticated() && 
+                    isValidShareLink(request.resource.data) &&
+                    request.resource.data.createdBy == request.auth.uid;
+
+      // Update logic:
+      // 1. Owner can update anything (e.g. revoke/delete)
+      // 2. Unauthenticated/Any user can "claim" the link IF it's not used yet
+      allow update: if (isAuthenticated() && resource.data.createdBy == request.auth.uid) ||
+                    (
+                      // Claim logic: Only allow updating 'isUsed' and 'deviceId'
+                      // and ONLY if isUsed was false
+                      resource.data.isUsed == false &&
+                      request.resource.data.isUsed == true &&
+                      'deviceId' in request.resource.data &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isUsed', 'deviceId'])
+                    );
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
