@@ -19,6 +19,12 @@ declare global {
 export const Turnstile = ({ sitekey, onVerify, onError }: TurnstileProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string | null>(null);
+  const callbacksRef = useRef({ onVerify, onError });
+
+  // Keep callbacks up to date without triggering effects
+  useEffect(() => {
+    callbacksRef.current = { onVerify, onError };
+  }, [onVerify, onError]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -29,17 +35,17 @@ export const Turnstile = ({ sitekey, onVerify, onError }: TurnstileProps) => {
           widgetIdRef.current = window.turnstile.render(containerRef.current, {
             sitekey,
             callback: (token: string) => {
-              onVerify(token);
+              callbacksRef.current.onVerify(token);
             },
             'error-callback': (error: any) => {
-              if (onError) onError(error);
+              if (callbacksRef.current.onError) callbacksRef.current.onError(error);
             },
             theme: 'light',
           });
         }
       } catch (err) {
         console.error('Turnstile render error:', err);
-        if (onError) onError(err);
+        if (callbacksRef.current.onError) callbacksRef.current.onError(err);
       }
     };
 
@@ -47,7 +53,6 @@ export const Turnstile = ({ sitekey, onVerify, onError }: TurnstileProps) => {
     if (window.turnstile) {
       renderWidget();
     } else {
-      // Otherwise wait for it (though async/defer usually handles this)
       const interval = setInterval(() => {
         if (window.turnstile) {
           renderWidget();
@@ -60,9 +65,10 @@ export const Turnstile = ({ sitekey, onVerify, onError }: TurnstileProps) => {
     return () => {
       if (widgetIdRef.current && window.turnstile) {
         window.turnstile.remove(widgetIdRef.current);
+        widgetIdRef.current = null;
       }
     };
-  }, [sitekey, onVerify]);
+  }, [sitekey]); // Only re-render if sitekey changes
 
-  return <div ref={containerRef} className="flex justify-center" />;
+  return <div ref={containerRef} className="flex justify-center min-h-[65px]" />;
 };

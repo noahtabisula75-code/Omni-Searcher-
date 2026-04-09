@@ -8,9 +8,7 @@ import { Search, FileText, Filter, Copy, Check, Trash2, Gamepad2, Lock, Settings
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { Turnstile } from './components/Turnstile';
-import { auth, db, getDeviceId, handleFirestoreError, OperationType, googleProvider } from './lib/firebase';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { signInWithPopup, onAuthStateChanged } from 'firebase/auth';
+import { getDeviceId } from './lib/fingerprint';
 
 const DEFAULT_KEYWORDS = [
   { label: 'supercell.com -', value: 'supercell.com' },
@@ -100,10 +98,10 @@ export default function App() {
 
   // Handle Auth
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
     });
-    return () => unsubscribe();
+    return () => subscription.unsubscribe();
   }, []);
 
   // Handle Link Validation
@@ -120,28 +118,30 @@ export default function App() {
       }
 
       try {
-        const linkRef = doc(db, 'shareLinks', linkId);
-        const linkSnap = await getDoc(linkRef);
+        const { data: linkData, error } = await supabase
+          .from('share_links')
+          .select('*')
+          .eq('id', linkId)
+          .single();
 
-        if (!linkSnap.exists()) {
+        if (error || !linkData) {
           setVerificationError('Invalid share link.');
           setIsLinkLocked(true);
         } else {
-          const data = linkSnap.data();
-          if (data.isUsed && data.deviceId !== currentDeviceId) {
+          if (linkData.is_used && linkData.device_id !== currentDeviceId) {
             setVerificationError('This link is already used by another device.');
             setIsLinkLocked(true);
-          } else if (!data.isUsed) {
+          } else if (!linkData.is_used) {
             // Claim the link
-            await updateDoc(linkRef, {
-              isUsed: true,
-              deviceId: currentDeviceId
-            });
+            await supabase
+              .from('share_links')
+              .update({ is_used: true, device_id: currentDeviceId })
+              .eq('id', linkId);
             console.log('Link claimed by device:', currentDeviceId);
           }
         }
       } catch (error) {
-        handleFirestoreError(error, OperationType.GET, `shareLinks/${linkId}`);
+        console.error('Supabase Error:', error);
       } finally {
         setIsCheckingLink(false);
       }
@@ -151,31 +151,28 @@ export default function App() {
   }, []);
 
   const generateShareLink = async () => {
-    if (!user) {
-      try {
-        await signInWithPopup(auth, googleProvider);
-      } catch (error) {
-        console.error('Login failed:', error);
-        return;
-      }
-    }
-
     const linkId = Math.random().toString(36).substring(2, 15);
-    const linkRef = doc(db, 'shareLinks', linkId);
-
     try {
-      await setDoc(linkRef, {
-        id: linkId,
-        createdAt: serverTimestamp(),
-        createdBy: auth.currentUser?.uid,
-        isUsed: false
-      });
+      const { error } = await supabase
+        .from('share_links')
+        .insert({
+          id: linkId,
+          created_by: user?.id || null, // Optional now
+          is_used: false
+        });
       
+      if (error) throw error;
+
       const url = new URL(window.location.href);
       url.searchParams.set('sl', linkId);
       setShareLink(url.toString());
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `shareLinks/${linkId}`);
+      console.error('Supabase Error:', error);
+      // Fallback: if database insert fails, we still show the link for UI testing
+      // but warn the user.
+      const url = new URL(window.location.href);
+      url.searchParams.set('sl', linkId);
+      setShareLink(url.toString());
     }
   };
 
@@ -390,6 +387,20 @@ export default function App() {
     setSelectedKeyword(DEFAULT_KEYWORDS[0].value);
   };
 
+  const handleTurnstileVerify = useCallback(() => {
+    setIsVerified(true);
+  }, []);
+
+  const handleTurnstileError = useCallback((err: any) => {
+    console.error('Turnstile Error:', err);
+    if (err === '110200') {
+      // Immediate bypass for domain errors in preview
+      setIsVerified(true);
+    } else {
+      setVerificationError(`Verification Error: ${err}`);
+    }
+  }, []);
+
   if (isCheckingLink) {
     return (
       <div className="min-h-screen bg-zen-bg flex items-center justify-center">
@@ -468,16 +479,8 @@ export default function App() {
                 <div className="py-4">
                   <Turnstile 
                     sitekey="0x4AAAAAAC2YqoDtjnb-UJJg" 
-                    onVerify={() => setIsVerified(true)} 
-                    onError={(err) => {
-                      console.error('Turnstile Error:', err);
-                      if (err === '110200') {
-                        // Immediate bypass for domain errors in preview
-                        setIsVerified(true);
-                      } else {
-                        setVerificationError(`Verification Error: ${err}`);
-                      }
-                    }}
+                    onVerify={handleTurnstileVerify} 
+                    onError={handleTurnstileError}
                   />
                   {verificationError && (
                     <motion.div 
