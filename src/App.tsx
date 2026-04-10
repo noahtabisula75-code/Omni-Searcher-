@@ -70,6 +70,7 @@ export default function App() {
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [keywords, setKeywords] = useState(DEFAULT_KEYWORDS);
+  const [filename, setFilename] = useState('filename.txt');
   const [selectedKeyword, setSelectedKeyword] = useState(DEFAULT_KEYWORDS[0].value);
   const [copied, setCopied] = useState(false);
   const [searchLimit, setSearchLimit] = useState(300);
@@ -84,8 +85,6 @@ export default function App() {
   const [loginError, setLoginError] = useState(false);
   
   // Admin Management State
-  const [newLabel, setNewLabel] = useState('');
-  const [newValue, setNewValue] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
 
@@ -99,28 +98,67 @@ export default function App() {
 
   const [showSqlHelper, setShowSqlHelper] = useState(false);
 
+  // Global Error Handler
+  useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      console.error('Global Error Caught:', event.error);
+    };
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      console.error('Unhandled Rejection Caught:', event.reason);
+    };
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleRejection);
+    };
+  }, []);
+
+  // Safe LocalStorage
+  const safeStorage = {
+    get: (key: string) => {
+      try {
+        return localStorage.getItem(key);
+      } catch (e) {
+        console.warn('LocalStorage access denied:', e);
+        return null;
+      }
+    },
+    set: (key: string, value: string) => {
+      try {
+        localStorage.setItem(key, value);
+      } catch (e) {
+        console.warn('LocalStorage write failed:', e);
+      }
+    }
+  };
+
   // Handle Auth
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-    return () => subscription.unsubscribe();
+    try {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null);
+      });
+      return () => subscription.unsubscribe();
+    } catch (e) {
+      console.error('Auth initialization failed:', e);
+    }
   }, []);
 
   // Handle Link Validation
   useEffect(() => {
     const validateLink = async () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const linkId = urlParams.get('sl');
-      const currentDeviceId = await getDeviceId();
-      setDeviceId(currentDeviceId);
-
-      if (!linkId) {
-        setIsCheckingLink(false);
-        return;
-      }
-
       try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const linkId = urlParams.get('sl');
+        const currentDeviceId = await getDeviceId();
+        setDeviceId(currentDeviceId);
+
+        if (!linkId) {
+          setIsCheckingLink(false);
+          return;
+        }
+
         const { data: linkData, error } = await supabase
           .from('share_links')
           .select('*')
@@ -150,7 +188,8 @@ export default function App() {
           }
         }
       } catch (error) {
-        console.error('Supabase Error:', error);
+        console.error('Initialization Error:', error);
+        setVerificationError('A system error occurred during initialization.');
       } finally {
         setIsCheckingLink(false);
       }
@@ -243,6 +282,17 @@ export default function App() {
           if (kwData.value.list.length > 0) setSelectedKeyword(kwData.value.list[0].value);
         }
 
+        // Fetch Filename
+        const { data: fnData } = await supabase
+          .from('app_data')
+          .select('value')
+          .eq('key', 'filename')
+          .single();
+        
+        if (fnData?.value?.name) {
+          setFilename(fnData.value.name);
+        }
+
         // Fetch Stock
         const { data: stockData } = await supabase
           .from('app_data')
@@ -257,9 +307,15 @@ export default function App() {
       } catch (e) {
         console.warn('Supabase fetch failed, falling back to localStorage');
         // Fallback to localStorage
-        const savedKeywords = localStorage.getItem('ksp_keywords');
-        if (savedKeywords) setKeywords(JSON.parse(savedKeywords));
-        const savedStock = localStorage.getItem('ksp_stock');
+        const savedKeywords = safeStorage.get('ksp_keywords');
+        if (savedKeywords) {
+          try {
+            setKeywords(JSON.parse(savedKeywords));
+          } catch (e) {
+            console.error('Failed to parse keywords:', e);
+          }
+        }
+        const savedStock = safeStorage.get('ksp_stock');
         if (savedStock) setInput(savedStock);
       } finally {
         setIsSyncing(false);
@@ -272,7 +328,7 @@ export default function App() {
 
   // Cooldown Persistence & Timer
   useEffect(() => {
-    const lastSearchTime = localStorage.getItem('ksp_last_search');
+    const lastSearchTime = safeStorage.get('ksp_last_search');
     if (lastSearchTime) {
       const elapsed = Date.now() - parseInt(lastSearchTime);
       const remaining = Math.max(0, 30 - Math.floor(elapsed / 1000));
@@ -304,18 +360,27 @@ export default function App() {
     }
   }, []);
 
-  // Auto-save keywords
+  // Auto-save filename
   useEffect(() => {
-    localStorage.setItem('ksp_keywords', JSON.stringify(keywords));
+    safeStorage.set('ksp_filename', filename);
     const timer = setTimeout(() => {
-      saveToCloud('keywords', { list: keywords });
+      saveToCloud('filename', { name: filename });
     }, 2000);
     return () => clearTimeout(timer);
-  }, [keywords, saveToCloud]);
+  }, [filename, saveToCloud]);
 
   // Auto-save stock
   useEffect(() => {
-    localStorage.setItem('ksp_stock', input);
+    try {
+      // Only save to localStorage if it's within reasonable limits (e.g., 4MB)
+      // to avoid QuotaExceededError which can crash the app
+      if (input.length < 4 * 1024 * 1024) {
+        localStorage.setItem('ksp_stock', input);
+      }
+    } catch (e) {
+      console.warn('LocalStorage stock save failed (likely quota exceeded):', e);
+    }
+    
     const timer = setTimeout(() => {
       saveToCloud('stock', { content: input });
     }, 3000);
@@ -365,14 +430,22 @@ export default function App() {
 
     // Set Cooldown
     setCooldown(30);
-    localStorage.setItem('ksp_last_search', Date.now().toString());
+    safeStorage.set('ksp_last_search', Date.now().toString());
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
   };
 
   const handleCopy = () => {
     if (results.length === 0) return;
-    navigator.clipboard.writeText(results.join('\n'));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    copyToClipboard(results.join('\n'));
   };
 
   const handleDownload = () => {
@@ -380,7 +453,7 @@ export default function App() {
     const element = document.createElement("a");
     const file = new Blob([results.join('\n')], {type: 'text/plain'});
     element.href = URL.createObjectURL(file);
-    element.download = `omni_search_${selectedKeyword}_${new Date().getTime()}.txt`;
+    element.download = filename || `omni_search_${selectedKeyword}_${new Date().getTime()}.txt`;
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
@@ -412,30 +485,6 @@ export default function App() {
       setLoginError(true);
       setTimeout(() => setLoginError(false), 2000);
     }
-  };
-
-  const addKeyword = () => {
-    if (!newLabel || !newValue) return;
-    const updated = [...keywords, { label: newLabel, value: newValue }];
-    setKeywords(updated);
-    localStorage.setItem('ksp_keywords', JSON.stringify(updated));
-    setNewLabel('');
-    setNewValue('');
-  };
-
-  const deleteKeyword = (index: number) => {
-    const updated = keywords.filter((_, i) => i !== index);
-    setKeywords(updated);
-    localStorage.setItem('ksp_keywords', JSON.stringify(updated));
-    if (selectedKeyword === keywords[index].value && updated.length > 0) {
-      setSelectedKeyword(updated[0].value);
-    }
-  };
-
-  const resetKeywords = () => {
-    setKeywords(DEFAULT_KEYWORDS);
-    localStorage.setItem('ksp_keywords', JSON.stringify(DEFAULT_KEYWORDS));
-    setSelectedKeyword(DEFAULT_KEYWORDS[0].value);
   };
 
   const handleTurnstileVerify = useCallback(() => {
@@ -781,14 +830,8 @@ export default function App() {
 
                       <div className="flex gap-3">
                         <button 
-                          onClick={resetKeywords}
-                          className="flex-1 py-3 bg-gray-50 text-gray-400 hover:bg-zen-red/5 hover:text-zen-red rounded-lg text-[10px] font-bold transition-all border border-zen-border"
-                        >
-                          RESET SYSTEM
-                        </button>
-                        <button 
                           onClick={() => setIsAuthorized(false)}
-                          className="flex-1 py-3 bg-zen-ink text-white rounded-lg text-[10px] font-bold transition-all"
+                          className="w-full py-3 bg-zen-ink text-white rounded-lg text-[10px] font-bold transition-all"
                         >
                           LOCK PANEL
                         </button>
@@ -856,11 +899,7 @@ CREATE POLICY "Allow public update" ON share_links FOR UPDATE USING (true);`}
                                 className="flex-1 bg-transparent text-[10px] text-gray-500 font-mono outline-none"
                               />
                               <button
-                                onClick={() => {
-                                  navigator.clipboard.writeText(shareLink);
-                                  setCopied(true);
-                                  setTimeout(() => setCopied(false), 2000);
-                                }}
+                                onClick={() => copyToClipboard(shareLink)}
                                 className="text-zen-red hover:text-zen-red/80 p-1"
                               >
                                 {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -906,9 +945,7 @@ CREATE POLICY "Allow public update" ON share_links FOR UPDATE USING (true);`}
                                       onClick={() => {
                                         const url = new URL(window.location.href);
                                         url.searchParams.set('sl', link.id);
-                                        navigator.clipboard.writeText(url.toString());
-                                        setCopied(true);
-                                        setTimeout(() => setCopied(false), 2000);
+                                        copyToClipboard(url.toString());
                                       }}
                                       className="p-1.5 hover:bg-gray-100 rounded text-gray-400 hover:text-zen-ink"
                                     >
@@ -934,47 +971,30 @@ CREATE POLICY "Allow public update" ON share_links FOR UPDATE USING (true);`}
                     </div>
 
                     <div className="space-y-8">
-                      <div className="space-y-4">
-                        <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Keyword Registry</h3>
-                        <div className="space-y-2 max-h-[240px] overflow-y-auto pr-2 custom-scrollbar">
-                          {keywords.map((kw, i) => (
-                            <div key={i} className="flex items-center justify-between p-4 bg-gray-50 border border-zen-border rounded-lg group">
-                              <div>
-                                <div className="text-xs font-bold text-zen-ink">{kw.label}</div>
-                                <div className="text-[9px] font-mono text-gray-400 mt-0.5">{kw.value}</div>
-                              </div>
-                              <button 
-                                onClick={() => deleteKeyword(i)}
-                                className="p-2 text-gray-300 hover:text-zen-red transition-all opacity-0 group-hover:opacity-100"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
                       <div className="space-y-4 p-6 bg-gray-50 rounded-lg border border-zen-border">
-                        <h4 className="text-[10px] font-bold text-zen-red uppercase tracking-widest">Register New</h4>
+                        <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest flex items-center gap-2">
+                          <FileText className="w-3 h-3" />
+                          Filename Configuration
+                        </h3>
                         <div className="space-y-3">
-                          <input 
-                            value={newLabel}
-                            onChange={(e) => setNewLabel(e.target.value)}
-                            placeholder="Label (e.g. Codm)"
-                            className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red"
-                          />
-                          <input 
-                            value={newValue}
-                            onChange={(e) => setNewValue(e.target.value)}
-                            placeholder="Value (e.g. garena.com)"
-                            className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red"
-                          />
-                          <button 
-                            onClick={addKeyword}
-                            className="w-full py-3 bg-zen-red text-white rounded-lg text-[10px] font-bold tracking-widest transition-all shadow-md shadow-zen-red/10"
-                          >
-                            ADD TO REGISTRY
-                          </button>
+                          <p className="text-[9px] text-gray-400 leading-relaxed">
+                            Set the default name for your downloaded search results. This is automatically saved to the cloud.
+                          </p>
+                          <div className="relative">
+                            <input 
+                              value={filename}
+                              onChange={(e) => setFilename(e.target.value)}
+                              placeholder="filename.txt"
+                              className="w-full bg-white border border-zen-border rounded-lg px-4 py-3 text-xs outline-none focus:border-zen-red font-mono"
+                            />
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                              <Save className="w-3 h-3 text-zen-red/40" />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 px-3 py-2 bg-white border border-zen-border rounded-lg">
+                            <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                            <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Auto-sync Active</span>
+                          </div>
                         </div>
                       </div>
                     </div>
