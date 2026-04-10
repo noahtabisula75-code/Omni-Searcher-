@@ -349,12 +349,19 @@ export default function App() {
   const saveToCloud = useCallback(async (key: string, value: any) => {
     setIsSyncing(true);
     try {
-      await supabase
+      const { error } = await supabase
         .from('app_data')
         .upsert({ key, value }, { onConflict: 'key' });
+      
+      if (error) throw error;
+      
       setLastSync(new Date());
-    } catch (e) {
+    } catch (e: any) {
       console.error('Cloud save failed:', e);
+      // If it's a 404 or table not found, we might want to alert the user
+      if (e.code === '42P01') {
+        console.warn('Table app_data does not exist. Please run the SQL setup in Admin Panel.');
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -388,15 +395,39 @@ export default function App() {
   }, [input, saveToCloud]);
 
   const totalLinesInSource = useMemo(() => {
+    if (!input) return 0;
+    // For large inputs, use a faster line counting method to avoid UI freezes
+    if (input.length > 1024 * 1024) {
+      let count = 0;
+      for (let i = 0; i < input.length; i++) {
+        if (input[i] === '\n') count++;
+      }
+      return count + (input[input.length - 1] === '\n' ? 0 : 1);
+    }
     return input.split('\n').filter(line => line.trim() !== '').length;
   }, [input]);
 
   const handleSearch = () => {
-    const allLines = input.split('\n').filter(line => line.trim() !== '');
-    // We search within the user-defined limit
-    const searchArea = allLines.slice(0, searchLimit);
-    const remainingArea = allLines.slice(searchLimit);
+    if (!input) return;
 
+    // Find the split point for searchLimit without splitting the whole string
+    let splitIndex = -1;
+    let newlineCount = 0;
+    for (let i = 0; i < input.length; i++) {
+      if (input[i] === '\n') {
+        newlineCount++;
+        if (newlineCount === searchLimit) {
+          splitIndex = i;
+          break;
+        }
+      }
+    }
+
+    const searchAreaStr = splitIndex === -1 ? input : input.substring(0, splitIndex);
+    const remainingAreaStr = splitIndex === -1 ? '' : input.substring(splitIndex + 1);
+
+    const searchArea = searchAreaStr.split('\n').filter(line => line.trim() !== '');
+    
     // Find matches in the search area
     const matchedLines = searchArea.filter(line => 
       line.toLowerCase().includes(selectedKeyword.toLowerCase())
@@ -425,7 +456,9 @@ export default function App() {
     setResults(uniqueResults);
 
     // Update global stock (input): remove the matched lines
-    const newStock = [...unmatchedInSearchArea, ...remainingArea].join('\n');
+    // Optimization: Join only the search area part and append the rest as a string
+    const unmatchedStr = unmatchedInSearchArea.join('\n');
+    const newStock = unmatchedStr + (unmatchedStr && remainingAreaStr ? '\n' : '') + remainingAreaStr;
     setInput(newStock);
 
     // Set Cooldown
@@ -472,6 +505,8 @@ export default function App() {
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setInput(content);
+      // Trigger immediate save for large uploads
+      saveToCloud('stock', { content });
     };
     reader.readAsText(file);
   };
@@ -784,7 +819,18 @@ export default function App() {
 
                       <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                          <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Global Stock</h3>
+                          <div className="flex items-center gap-3">
+                            <h3 className="text-[10px] font-bold text-zen-ink/40 uppercase tracking-widest">Global Stock</h3>
+                            {isSyncing && (
+                              <div className="flex items-center gap-1.5">
+                                <RefreshCw className="w-2.5 h-2.5 text-zen-indigo animate-spin" />
+                                <span className="text-[8px] font-bold text-zen-indigo uppercase tracking-widest">Syncing...</span>
+                              </div>
+                            )}
+                            {!isSyncing && lastSync && (
+                              <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Saved {lastSync.toLocaleTimeString()}</span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => saveToCloud('stock', { content: input })}
@@ -867,9 +913,10 @@ export default function App() {
                                 <span className="text-[9px] font-bold uppercase tracking-widest text-zen-red">SQL Schema Required</span>
                                 <button onClick={() => setShowSqlHelper(false)} className="text-white/40 hover:text-white"><X className="w-3 h-3" /></button>
                               </div>
-                              <p className="text-[8px] text-gray-400">Run this in your Supabase SQL Editor to enable links:</p>
+                              <p className="text-[8px] text-gray-400">Run this in your Supabase SQL Editor to enable links and cloud saving:</p>
                               <pre className="text-[8px] font-mono bg-black/30 p-3 rounded overflow-x-auto custom-scrollbar">
-{`CREATE TABLE IF NOT EXISTS share_links (
+{`-- Table for shareable links
+CREATE TABLE IF NOT EXISTS share_links (
   id TEXT PRIMARY KEY,
   is_used BOOLEAN DEFAULT FALSE,
   device_id TEXT,
@@ -877,17 +924,26 @@ export default function App() {
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Table for application settings and stock
+CREATE TABLE IF NOT EXISTS app_data (
+  key TEXT PRIMARY KEY,
+  value JSONB,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Enable RLS
 ALTER TABLE share_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_data ENABLE ROW LEVEL SECURITY;
 
--- Allow public read for validation
-CREATE POLICY "Allow public read" ON share_links FOR SELECT USING (true);
+-- Policies for share_links
+CREATE POLICY "Allow public read links" ON share_links FOR SELECT USING (true);
+CREATE POLICY "Allow public insert links" ON share_links FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update links" ON share_links FOR UPDATE USING (true);
 
--- Allow public insert for generation (or restrict to auth)
-CREATE POLICY "Allow public insert" ON share_links FOR INSERT WITH CHECK (true);
-
--- Allow public update for claiming
-CREATE POLICY "Allow public update" ON share_links FOR UPDATE USING (true);`}
+-- Policies for app_data
+CREATE POLICY "Allow public read data" ON app_data FOR SELECT USING (true);
+CREATE POLICY "Allow public insert data" ON app_data FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update data" ON app_data FOR UPDATE USING (true);`}
                               </pre>
                             </div>
                           )}
