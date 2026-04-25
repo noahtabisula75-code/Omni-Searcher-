@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { Turnstile } from './components/Turnstile';
 import { getDeviceId } from './lib/fingerprint';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
 
 const DEFAULT_KEYWORDS = [
   { label: 'supercell.com -', value: 'supercell.com' },
@@ -302,11 +303,25 @@ export default function App() {
         
         if (stockData?.value?.content) {
           setInput(stockData.value.content);
+          // Sync to local cache
+          idbSet('ksp_stock', stockData.value.content);
+        } else {
+          // Try local cache if Supabase is empty
+          const cachedStock = await idbGet<string>('ksp_stock');
+          if (cachedStock) setInput(cachedStock);
         }
         setLastSync(new Date());
       } catch (e) {
-        console.warn('Supabase fetch failed, falling back to localStorage');
-        // Fallback to localStorage
+        console.warn('Supabase fetch failed, falling back to local storage');
+        // Combined Local Fallback
+        const cachedStock = await idbGet<string>('ksp_stock');
+        if (cachedStock) {
+          setInput(cachedStock);
+        } else {
+          const savedStock = safeStorage.get('ksp_stock');
+          if (savedStock) setInput(savedStock);
+        }
+
         const savedKeywords = safeStorage.get('ksp_keywords');
         if (savedKeywords) {
           try {
@@ -315,8 +330,6 @@ export default function App() {
             console.error('Failed to parse keywords:', e);
           }
         }
-        const savedStock = safeStorage.get('ksp_stock');
-        if (savedStock) setInput(savedStock);
       } finally {
         setIsSyncing(false);
       }
@@ -378,14 +391,18 @@ export default function App() {
 
   // Auto-save stock
   useEffect(() => {
+    // Always save to IndexedDB as it handles large data size (up to GBs)
+    idbSet('ksp_stock', input).catch(e => {
+      console.warn('IndexedDB stock save failed:', e);
+    });
+
     try {
-      // Only save to localStorage if it's within reasonable limits (e.g., 4MB)
-      // to avoid QuotaExceededError which can crash the app
-      if (input.length < 4 * 1024 * 1024) {
+      // Small datasets also go to localStorage for ultra-fast fallback
+      if (input.length < 2 * 1024 * 1024) {
         localStorage.setItem('ksp_stock', input);
       }
     } catch (e) {
-      console.warn('LocalStorage stock save failed (likely quota exceeded):', e);
+      // Ignore quota errors here as idbSet is the primary backup
     }
     
     const timer = setTimeout(() => {
@@ -505,6 +522,8 @@ export default function App() {
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setInput(content);
+      // Immediate local backup
+      idbSet('ksp_stock', content);
       // Trigger immediate save for large uploads
       saveToCloud('stock', { content });
     };
