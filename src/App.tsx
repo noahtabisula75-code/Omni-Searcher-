@@ -12,9 +12,11 @@ import { getDeviceId } from './lib/fingerprint';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 
 const DEFAULT_KEYWORDS = [
-  { label: 'supercell.com -', value: 'supercell.com' },
-  { label: 'garena.com -', value: 'garena.com' },
-  { label: 'mtacc -:', value: 'mtacc' },
+  { label: 'CODM', value: 'garena.com' },
+  { label: 'MLBB', value: 'mtacc' },
+  { label: 'Coc', value: 'Supercell' },
+  { label: 'Crunchy', value: 'crunchyroll.com' },
+  { label: 'expressvpn', value: 'expressvpn' },
 ];
 
 const ADMIN_PASSWORD = 'TeleHostAdmin@#$021412#';
@@ -96,6 +98,12 @@ export default function App() {
   const [shareLinksList, setShareLinksList] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
   const [deviceId, setDeviceId] = useState<string>('');
+
+  // Maintenance State
+  const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
+  const [maintenanceExpiry, setMaintenanceExpiry] = useState<number | null>(null);
+  const [maintenanceDurationSelect, setMaintenanceDurationSelect] = useState<string>('1');
 
   const [showSqlHelper, setShowSqlHelper] = useState(false);
 
@@ -266,23 +274,34 @@ export default function App() {
     }
   };
 
+  const setMaintenanceState = async (active: boolean) => {
+    let expiresAt: number | null = null;
+    if (active) {
+      const dur = parseFloat(maintenanceDurationSelect);
+      expiresAt = Date.now() + (dur * 60 * 60 * 1000);
+      setMaintenanceExpiry(expiresAt);
+    } else {
+      setMaintenanceExpiry(null);
+    }
+    
+    setIsMaintenanceMode(active);
+
+    try {
+      await saveToCloud('maintenance', {
+        active,
+        message: maintenanceMessage,
+        expiresAt
+      });
+    } catch (e) {
+      console.error('Failed to save maintenance state', e);
+    }
+  };
+
   // Load keywords and stock from Supabase on mount
   useEffect(() => {
     const fetchData = async () => {
       setIsSyncing(true);
       try {
-        // Fetch Keywords
-        const { data: kwData } = await supabase
-          .from('app_data')
-          .select('value')
-          .eq('key', 'keywords')
-          .single();
-        
-        if (kwData?.value?.list) {
-          setKeywords(kwData.value.list);
-          if (kwData.value.list.length > 0) setSelectedKeyword(kwData.value.list[0].value);
-        }
-
         // Fetch Filename
         const { data: fnData } = await supabase
           .from('app_data')
@@ -292,6 +311,29 @@ export default function App() {
         
         if (fnData?.value?.name) {
           setFilename(fnData.value.name);
+        }
+
+        // Fetch Maintenance
+        const { data: mtData } = await supabase
+          .from('app_data')
+          .select('value')
+          .eq('key', 'maintenance')
+          .single();
+        
+        if (mtData?.value) {
+          const { active, message, expiresAt } = mtData.value;
+          
+          if (active && expiresAt && Date.now() < expiresAt) {
+            setIsMaintenanceMode(true);
+            setMaintenanceMessage(message || '');
+            setMaintenanceExpiry(expiresAt);
+          } else if (active && (!expiresAt || Date.now() >= expiresAt)) {
+            // Expired or invalid, disable maintenance
+            setIsMaintenanceMode(false);
+            setMaintenanceMessage('');
+            setMaintenanceExpiry(null);
+            // Optionally auto-turn off in DB but let's just let Admin override later
+          }
         }
 
         // Fetch Stock
@@ -320,15 +362,6 @@ export default function App() {
         } else {
           const savedStock = safeStorage.get('ksp_stock');
           if (savedStock) setInput(savedStock);
-        }
-
-        const savedKeywords = safeStorage.get('ksp_keywords');
-        if (savedKeywords) {
-          try {
-            setKeywords(JSON.parse(savedKeywords));
-          } catch (e) {
-            console.error('Failed to parse keywords:', e);
-          }
         }
       } finally {
         setIsSyncing(false);
@@ -667,6 +700,46 @@ export default function App() {
           <RefreshCw className="w-12 h-12 text-zen-red animate-spin mx-auto mb-4" />
           <p className="text-zen-ink/40 font-mono text-[10px] uppercase tracking-widest">Validating security link...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Maintenance screen logic: Block users (except admin)
+  if (isMaintenanceMode && currentView !== 'admin') {
+    return (
+      <div className="min-h-screen bg-zen-bg flex items-center justify-center p-6 relative overflow-hidden">
+        <SakuraBackground />
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="relative z-10 max-w-md w-full bg-white border border-zen-border p-12 rounded-2xl text-center shadow-2xl"
+        >
+          <div className="w-24 h-24 bg-zen-red/10 rounded-3xl flex items-center justify-center mx-auto mb-8 rotate-3">
+            <Lock className="w-12 h-12 text-zen-red" />
+          </div>
+          <h1 className="text-3xl font-bold text-zen-ink mb-3 tracking-tight">System Maintenance</h1>
+          <p className="text-gray-400 font-mono text-[10px] uppercase tracking-[0.2em] mb-8">
+            Access Temporarily Disabled
+          </p>
+          <div className="p-6 bg-gray-50 border border-zen-border rounded-xl text-left mb-8">
+            <p className="text-[9px] text-zen-ink font-bold uppercase tracking-[0.3em] mb-2">Message</p>
+            <p className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap">
+              {maintenanceMessage || 'The system is undergoing scheduled maintenance. Please check back later.'}
+            </p>
+            {maintenanceExpiry && (
+              <div className="mt-4 pt-4 border-t border-zen-border">
+                <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">Expected Completion:</p>
+                <p className="text-xs font-mono text-zen-ink mt-1">{new Date(maintenanceExpiry).toLocaleString()}</p>
+              </div>
+            )}
+          </div>
+          <button 
+            onClick={() => setCurrentView('admin')}
+            className="text-[10px] text-gray-300 hover:text-zen-red transition-colors uppercase tracking-widest"
+          >
+            Admin Access
+          </button>
+        </motion.div>
       </div>
     );
   }
@@ -1070,6 +1143,67 @@ CREATE POLICY "Allow public update data" ON app_data FOR UPDATE USING (true);`}
                             <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                             <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Auto-sync Active</span>
                           </div>
+                        </div>
+                      </div>
+                      
+                      {/* Maintenance Block */}
+                      <div className="space-y-4 p-6 bg-zen-red/5 rounded-lg border border-zen-red/20 shadow-sm relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-zen-red/10 rounded-full blur-3xl -mr-16 -mt-16" />
+                        <h3 className="text-[10px] font-bold text-zen-red uppercase tracking-widest flex items-center gap-2 relative z-10">
+                          <AlertTriangle className="w-3 h-3" />
+                          Maintenance System
+                        </h3>
+                        <div className="space-y-4 relative z-10">
+                          <p className="text-[9px] text-gray-500 leading-relaxed uppercase tracking-widest font-mono">
+                            Status: <span className={isMaintenanceMode ? "text-zen-red font-bold" : "text-green-600 font-bold"}>{isMaintenanceMode ? "ACTIVE" : "INACTIVE"}</span>
+                          </p>
+
+                          {isMaintenanceMode ? (
+                            <div className="space-y-2">
+                              {maintenanceExpiry && (
+                                <p className="text-[10px] font-bold text-zen-ink">
+                                  Expires: <span className="font-mono">{new Date(maintenanceExpiry).toLocaleString()}</span>
+                                </p>
+                              )}
+                              <button 
+                                onClick={() => setMaintenanceState(false)}
+                                className="w-full py-3 bg-white border border-zen-border text-zen-ink rounded-xl font-bold text-[10px] uppercase tracking-widest hover:border-zen-red hover:text-zen-red transition-all"
+                              >
+                                Stop Maintenance
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Custom Message (Optional)</label>
+                                <textarea
+                                  value={maintenanceMessage}
+                                  onChange={(e) => setMaintenanceMessage(e.target.value)}
+                                  placeholder="We are upgrading our servers..."
+                                  className="w-full bg-white border border-zen-border rounded-lg px-3 py-2 text-xs outline-none focus:border-zen-red min-h-[60px]"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Duration</label>
+                                <select 
+                                  value={maintenanceDurationSelect}
+                                  onChange={(e) => setMaintenanceDurationSelect(e.target.value)}
+                                  className="w-full bg-white border border-zen-border rounded-lg px-3 py-2 text-xs outline-none focus:border-zen-red"
+                                >
+                                  <option value="1">1 hour</option>
+                                  <option value="3">3 hours</option>
+                                  <option value="7">7 hours</option>
+                                  <option value="24">1 day</option>
+                                </select>
+                              </div>
+                              <button 
+                                onClick={() => setMaintenanceState(true)}
+                                className="w-full py-3 bg-zen-red text-white rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-zen-ink transition-all shadow-lg shadow-zen-red/20"
+                              >
+                                Activate Maintenance
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
